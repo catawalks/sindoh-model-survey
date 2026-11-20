@@ -12,9 +12,11 @@
 #   - read or copy a flash image (only the md5 of the first 256 KB of the
 #     boot partitions, to tell boot loader builds apart);
 #   - move a motor, heat, reboot, scan Wi-Fi or probe I2C;
-#   - run a vendor script (it reads /snapshot_version.sh as text; the only
-#     stock program it starts is /app/display.sh, the screen message every
-#     stock update shows, and only after checking that it just draws text).
+#   - run a vendor script (it reads /snapshot_version.sh as text). The stock
+#     programs it starts are the ones Sindoh's own USB tools use for the
+#     screen: /app/display.sh (only after checking that it just draws text),
+#     /app/tinydebug (wdt disable, keywait) and /app/appBrowser again with
+#     the command line it had (see "screen takeover").
 # Wi-Fi names and keys, passwords, e-mail settings, serial numbers, MAC and IP
 # addresses are masked before the file is written (see mask_awk below).
 #
@@ -22,7 +24,7 @@
 # wrapped so one failure never stops the rest, and slow ones get a time limit.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
-SURVEY_VERSION=1.0
+SURVEY_VERSION=1.1
 
 # SURVEY_ROOT: tests run this against a fake root; empty on a printer
 R=${SURVEY_ROOT:-}
@@ -71,14 +73,19 @@ log() { echo "[survey] $*"; }
 # /app/display.sh is how every stock update writes to the screen (it starts
 # /app/tinydebug with the text). Use it only if it looks like the known stock
 # file: tinydebug and nothing that writes.
+# SURVEY_SCREEN_TEST=1: tests use stub display.sh / tinydebug under $R/app.
+APP=/app
+[ "${SURVEY_SCREEN_TEST:-0}" = 1 ] && APP=$R/app
+DSP=$APP/display.sh
+TD=$APP/tinydebug
 SCREEN=0
-if [ -z "$R" ] && [ -f /app/display.sh ] && grep -q tinydebug /app/display.sh 2>/dev/null &&
-   ! grep -qiE 'setenv|saveenv|nandwrite|flash_erase|ubiformat|ubiupdatevol|dd |sqlite|reboot|poweroff|halt|mtd|mmcblk|rm ' /app/display.sh 2>/dev/null; then
+if { [ -z "$R" ] || [ "$APP" != /app ]; } && [ -f "$DSP" ] && grep -q tinydebug "$DSP" 2>/dev/null &&
+   ! grep -qiE 'setenv|saveenv|nandwrite|flash_erase|ubiformat|ubiupdatevol|dd |sqlite|reboot|poweroff|halt|mtd|mmcblk|rm ' "$DSP" 2>/dev/null; then
     SCREEN=1
 fi
 show() {
     log "$1 / $2 / $3"
-    [ $SCREEN = 1 ] && /app/display.sh "$1" "$2" "$3" "" >/dev/null 2>&1 </dev/null
+    [ $SCREEN = 1 ] && "$DSP" "$1" "$2" "$3" "" >/dev/null 2>&1 </dev/null
 }
 
 # ------------------------------------------------------------- helpers ----
@@ -98,7 +105,8 @@ tmo() {
     "$@" &
     _p=$!
     _flag=$FLAGS/$_p.$_tn
-    ( sleep "$_s"; [ -d "$FLAGS" ] && [ ! -e "$_flag" ] && kill -9 "$_p" ) >/dev/null 2>&1 </dev/null &
+    # (fd 9 closed: a watcher must not keep the stick busy after the survey)
+    ( exec 9<&-; sleep "$_s"; [ -d "$FLAGS" ] && [ ! -e "$_flag" ] && kill -9 "$_p" ) >/dev/null 2>&1 </dev/null &
     wait "$_p"
     _r=$?
     : > "$_flag"
@@ -138,6 +146,117 @@ run() {
     [ "$_n" -gt "$_max" ] 2>/dev/null && echo "[... cut: $_n lines, first $_max kept]" >> "$RAW"
     [ $_rc = 0 ] || echo "[exit $_rc]" >> "$RAW"
     return 0
+}
+
+# ------------------------------------------------- screen takeover ----
+# The stock touch screen (/app/appBrowser, started by UIManager) keeps
+# drawing over display.sh's text (seen on a 1X, 2026-11-20). Sindoh's own
+# USB tools (1X update.sh; DP200 karas_pinetree_util.sh kill_app) put a
+# message over it like this: "tinydebug wdt disable", kill -9 appBrowser,
+# display.sh, "tinydebug keywait" for a touch. The survey does the same, but
+# only to appBrowser: UIManager, the motion firmware, stdin2log and the
+# watchdog pinger keep running. Afterwards appBrowser is started again with
+# the exact command line, environment and folder it had (the stock
+# "recovery.check.sh --restart-appbrowser" restarts it the same way, alone,
+# with UIManager running; its own flags are for other boards).
+# Skipped while karas.db does not say "not printing" (printingStatus 0).
+GUI_TAKEN=0
+GUI_DIR=
+gui_pids() {
+    for _g in /proc/[0-9]*; do
+        _a=$(tr '\0' '\n' < "$_g/cmdline" 2>/dev/null | head -n 1)
+        case "$_a" in
+            appBrowser|*/appBrowser|*/appBrowser.exe) echo "${_g#/proc/}" ;;
+        esac
+    done
+}
+take_screen() {
+    [ $SCREEN = 1 ] || return 0
+    if [ "$PRINTING" != 0 ]; then
+        log "printingStatus '${PRINTING:-unknown}': the touch screen is left alone"
+        return 0
+    fi
+    _gp=$(gui_pids | head -n 1)
+    if [ -z "$_gp" ]; then
+        log "no appBrowser running: display.sh only"
+        return 0
+    fi
+    GUI_DIR=$WORK/gui
+    mkdir -p "$GUI_DIR" || return 0
+    tr '\0' '\n' < "/proc/$_gp/cmdline" > "$GUI_DIR/cmd" 2>/dev/null
+    tr '\0' '\n' < "/proc/$_gp/environ" > "$GUI_DIR/env" 2>/dev/null
+    readlink "/proc/$_gp/cwd" > "$GUI_DIR/cwd" 2>/dev/null
+    # without its command line it could not be started again: leave it
+    [ -s "$GUI_DIR/cmd" ] || { log "can't read appBrowser's command line"; return 0; }
+    log "taking the screen from appBrowser (pid $_gp): $(tr '\n' ' ' < "$GUI_DIR/cmd")"
+    [ -x "$TD" ] && "$TD" wdt disable >/dev/null 2>&1 </dev/null
+    for _g in $(gui_pids); do kill -9 "$_g" 2>/dev/null; done
+    [ -x "$TD" ] && "$TD" wdt disable >/dev/null 2>&1 </dev/null
+    GUI_TAKEN=1
+}
+# for the report: did something start appBrowser again by itself?
+screen_note() {
+    sec "screen"
+    echo "display.sh used: $SCREEN; printingStatus: ${PRINTING:-unknown}; appBrowser taken over: $GUI_TAKEN" >> "$RAW"
+    if [ $GUI_TAKEN = 1 ]; then
+        echo "appBrowser command: $(tr '\n' ' ' < "$GUI_DIR/cmd")" >> "$RAW"
+        echo "appBrowser folder: $(cat "$GUI_DIR/cwd" 2>/dev/null)" >> "$RAW"
+        echo "appBrowser after the takeover: $(gui_pids | tr '\n' ' ')(empty = stayed stopped)" >> "$RAW"
+    fi
+}
+restore_screen() {
+    [ $GUI_TAKEN = 1 ] || return 0
+    GUI_TAKEN=0
+    # our message off (display.sh does the same before each message)
+    for _g in $(pidof tinydebug 2>/dev/null); do kill -9 "$_g" 2>/dev/null; done
+    if [ -n "$(gui_pids)" ]; then
+        log "appBrowser is already running again"
+        return 0
+    fi
+    log "starting appBrowser again"
+    _cwd=$(cat "$GUI_DIR/cwd" 2>/dev/null)
+    [ -d "$_cwd" ] || _cwd=/app
+    # env -i NAME=value... command args...: exactly what it had before
+    set --
+    while IFS= read -r _l; do
+        case "$_l" in *=*) set -- "$@" "$_l" ;; esac
+    done < "$GUI_DIR/env"
+    while IFS= read -r _l; do set -- "$@" "$_l"; done < "$GUI_DIR/cmd"
+    _ss=$(tool setsid)
+    ( cd "$_cwd" && exec $_ss env -i "$@" ) >/dev/null 2>&1 </dev/null &
+    sleep 3
+    # the priority the stock /app/run.sh gives it
+    for _g in $(gui_pids); do
+        [ -w "/proc/$_g/oom_adj" ] && echo -16 > "/proc/$_g/oom_adj" 2>/dev/null
+        log "appBrowser pid $_g"
+    done
+}
+# a stop signal must not leave the touch screen off
+trap 'restore_screen; rm -rf "$WORK" "$LOCK"; exit 0' HUP INT TERM
+
+stick_in() {
+    [ -n "$R" ] && { [ -d "$STICK" ]; return; }
+    awk -v d="$(dirname "$STICK")" '$2 == d { f = 1 } END { exit !f }' /proc/mounts 2>/dev/null
+}
+# the final message: waits for a touch, the stick being pulled, or 10 min
+POPUP_SECS=${SURVEY_POPUP_SECS:-600}
+popup() {
+    show "$1" "$2" "$3"
+    [ $GUI_TAKEN = 1 ] && [ -x "$TD" ] || return 0
+    _end=$(( $(date +%s) + POPUP_SECS ))
+    while :; do
+        _left=$(( _end - $(date +%s) ))
+        [ $_left -gt 0 ] || { log "no touch for $POPUP_SECS s: closing"; return 0; }
+        tmo "$_left" "$TD" keywait >/dev/null 2>&1 </dev/null
+        _rc=$?
+        # pulling the stick makes the stock media.connect kill -9 every
+        # tinydebug, keywait too: that is not a touch, but closes as well
+        sleep 1
+        stick_in || { log "stick removed: closing"; return 0; }
+        [ $_rc = 0 ] && { log "touched: closing"; return 0; }
+        # ended some other way with the stick still in: show it again
+        show "$1" "$2" "$3"
+    done
 }
 
 # show FILE...: whole small text files (one section each)
@@ -210,7 +329,6 @@ karas_awk='
 }'
 
 # ------------------------------------------------------------- start ----
-show "Model survey" "Reading printer info" "Do not remove the stick"
 log "version $SURVEY_VERSION, stick $STICK"
 
 # --- identity
@@ -233,6 +351,7 @@ DBC=$WORK/karas_copy.db
 TLI=
 MODEL=
 SERIAL=
+PRINTING=
 if [ -n "$DB" ] && [ -n "$SQL" ]; then
     # query a copy: the printer's own database is never opened
     cp "$R$DB" "$DBC" 2>/dev/null
@@ -242,6 +361,9 @@ if [ -n "$DB" ] && [ -n "$SQL" ]; then
     TLI=$(echo "$TLI" | tr -d '\r' | head -n 1)
     MODEL=$(echo "$MODEL" | tr -d '\r' | head -n 1)
     SERIAL=$(echo "$SERIAL" | tr -d '\r' | head -n 1)
+    # 0 = not printing (DP200 and 1X karas.db); anything else, or no
+    # answer, and the touch screen is left alone
+    PRINTING=$(tmo 10 $SQL "$DBC" 'select printingStatus from INST_ENGINE_GENERAL limit 1' 2>/dev/null | tr -d '\r' | head -n 1)
 fi
 MAC=
 for _n in eth0 mlan0 wlan0; do
@@ -250,6 +372,9 @@ for _n in eth0 mlan0 wlan0; do
 done
 # a short id to tell reports from one printer apart (not reversible)
 PID=$(printf '%s|%s' "$SERIAL" "$MAC" | md5sum 2>/dev/null | cut -c1-8)
+
+take_screen
+show "Model survey" "Reading printer info, about a minute" "Do not remove the stick"
 
 sec "survey"
 {
@@ -456,6 +581,7 @@ done
 run 4000 15 "dmesg" dmesg
 
 # ------------------------------------------------------------ write ----
+screen_note
 sec "end"
 echo "survey finished: $(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)" >> "$RAW"
 
@@ -481,16 +607,21 @@ sync
 exec 9<&-
 if [ $STICK_OK = 0 ]; then
     log "the stick is no longer mounted at $ROOTDIR; nothing written"
-    show "Model survey" "The stick was unmounted" "Plug it in again to retry"
+    popup "Model survey" "The stick was unmounted, nothing saved" "Touch to close"
 elif [ -s "$OUT" ]; then
     _kb=$(( $(wc -c < "$OUT") / 1024 ))
     log "wrote $OUT ($_kb KB)"
-    show "Model survey done" "$(basename "$OUT")" "Remove the stick, then power off and on"
+    if [ $GUI_TAKEN = 1 ]; then
+        popup "Model survey complete" "$(basename "$OUT")" "Touch to close"
+    else
+        show "Model survey complete" "$(basename "$OUT")" "You can remove the stick"
+        sleep 3
+    fi
 else
     log "could not write the report to the stick"
-    show "Model survey" "Could not write to the stick" "Nothing on the printer was changed"
+    popup "Model survey" "Could not write to the stick" "Touch to close"
 fi
+restore_screen
 rm -rf "$WORK" "$LOCK" 2>/dev/null
-sleep 3
 # always 0: the stock auto_update.sh stops on a failed script
 exit 0

@@ -10,8 +10,8 @@ The printer's own USB update runs it, so you don't need a serial cable, a
 root shell or any extra software. It saves one text file on the stick. Send
 us that file.
 
-> **Status:** new. It has been tested on a PC against a fake printer, but not
-> yet on a real printer of any model. See [Tested so far](#tested-so-far).
+> **Status:** new. v1.0 ran on a 3DWOX 1X. Other models are tested on a PC
+> only. See [Tested so far](#tested-so-far).
 
 ## Supported printers
 
@@ -52,12 +52,13 @@ folders works on every model above.
    survey if it finds one.
 4. **Eject the stick** in Windows (*Safely Remove Hardware*), then plug it
    into the printer while the printer is on, idle and not printing.
-5. **Wait.** The screen shows "Model survey / Reading printer info". After
-   about a minute it shows **"Model survey done"** and the file name. If
-   nothing happens after two minutes, power the printer off and on with the
-   stick still plugged in.
-6. **Remove the stick, then power the printer off and on.** The normal
-   screen comes back.
+5. **Wait.** The normal screen goes away and the printer shows "Model
+   survey / Reading printer info". After about a minute it shows **"Model
+   survey complete"**, the file name and "Touch to close".
+6. **Touch the screen**, or just pull the stick out. The normal screen
+   comes back after a few seconds. With no touch, the message closes by
+   itself after 10 minutes. If the normal screen doesn't come back, power
+   the printer off and on.
 7. **Send us the file.** It's at the top level of the stick, named like
    `survey_RODUP_220111_1_3DWOX1_20261120-153000.txt` (firmware, model code,
    date). Open an issue on this repository and attach it, and say which
@@ -128,6 +129,37 @@ All of this describes the printer, not you:
   screen-message helper every stock update uses. The survey first checks
   that the file only draws text.
 
+### The screen
+
+The printer's touch screen program (`/app/appBrowser`) would draw over the
+survey's messages (on a 1X with v1.0, nothing could be seen). So the survey
+takes over the screen the way Sindoh's own USB tools do:
+- it runs `tinydebug wdt disable`, stops `appBrowser`, and shows its
+  messages with `display.sh`;
+- `tinydebug keywait` waits for the touch, as in Sindoh's updates.
+  Pulling the stick also closes the message, but it is never taken for a
+  touch;
+- afterwards it starts `appBrowser` again with exactly the command line,
+  settings and folder it had. Sindoh's `recovery.check.sh
+  --restart-appbrowser` restarts it the same way.
+
+Nothing else is stopped: `UIManager`, the motion firmware and the
+watchdog keep running.
+
+Two things change until the next power-on:
+- the `tinydebug` watchdog stays disabled, as after any of Sindoh's own USB
+  tools;
+- the touch screen runs as a restarted copy. If it doesn't come back
+  properly, a power cycle restores everything.
+
+The survey leaves the screen alone in these cases, and only shows its text
+as v1.0 did:
+- the database doesn't say the printer is idle (`printingStatus` 0);
+- `appBrowser` isn't running;
+- its command line can't be read.
+
+There is no LED signal instead: the 1X's `tinydebug` has no LED command.
+
 The script is [`unmistakable_model_survey.sh`](unmistakable_model_survey.sh).
 Every command in it has a time limit, and a failing command doesn't stop the
 rest. The only files it writes are its report on the stick and scratch files
@@ -173,8 +205,15 @@ files.
     `media.connect` runs it for `sda` and again for `sda1`). The running
     copy keeps the stick busy until its report is written. It writes only
     if the stick is still mounted, never into the printer's own `/mnt` folder.
-- **Not tested on a printer yet**, on any model. The DP200 family will be
-  first. The 3DWOX 1, 2X, 1X and 7X are untested until an owner runs it.
+  - the screen takeover, with stub `display.sh` / `tinydebug` and a fake
+    `appBrowser`. A touch, a 10-minute timeout and a pulled stick each
+    close the message and start `appBrowser` again, with the same command
+    line, folder and settings. While printing (`printingStatus` not 0), or
+    with no `appBrowser` running, the screen is left alone.
+- **On printers:** v1.0 ran on a 3DWOX 1X (`ROD1X_200916_2`) and saved a
+  complete report, but its messages were hidden behind the touch screen.
+  v1.1's screen takeover has not run on a printer yet. The DP200 family,
+  3DWOX 1, 2X and 7X are untested until an owner runs it.
 
 ## License
 
