@@ -126,8 +126,11 @@ All of this describes the printer, not you:
 - move a motor, heat anything, reboot, scan for Wi-Fi or probe the I²C
   bus;
 - run any of Sindoh's scripts. The one exception is `/app/display.sh`, the
-  screen-message helper every stock update uses. The survey first checks
-  that the file only draws text.
+  screen-message helper every stock update uses. It is used only if its md5
+  matches one of the two stock files (DP200 / 3DWOX 1 / 1X / 2X, and 7X).
+  Any other file is used only if it starts `tinydebug` and contains no
+  command such as `rm`, `dd`, `reboot` or `fw_setenv` as a whole word. The
+  report says which rule decided.
 
 ### The screen
 
@@ -205,15 +208,18 @@ files.
     `media.connect` runs it for `sda` and again for `sda1`). The running
     copy keeps the stick busy until its report is written. It writes only
     if the stick is still mounted, never into the printer's own `/mnt` folder.
-  - the screen takeover, with stub `display.sh` / `tinydebug` and a fake
-    `appBrowser`. A touch, the 1-minute timeout and a pulled stick each
+  - the screen takeover, with a byte-for-byte copy of the 1X's stock
+    `display.sh`, a stub `tinydebug` and a fake `appBrowser`. A touch, the
+    1-minute timeout and a pulled stick each
     close the message and start `appBrowser` again, with the same command
     line, folder and settings. While printing (`printingStatus` not 0), or
     with no `appBrowser` running, the screen is left alone.
-- **On printers:** v1.0 ran on a 3DWOX 1X (`ROD1X_200916_2`) and saved a
-  complete report, but its messages were hidden behind the touch screen.
-  v1.1's screen takeover has not run on a printer yet. The DP200 family,
-  3DWOX 1, 2X and 7X are untested until an owner runs it.
+- **On printers:** v1.0 and a first v1.1 build ran on a 3DWOX 1X
+  (`ROD1X_200916_2`) and saved complete reports, but showed nothing on the
+  screen. A text filter wrongly rejected the stock `display.sh`: its
+  "-platform" contains "rm". The md5 check above replaces that filter, and
+  this build has not run on a printer yet. The DP200 family, 3DWOX 1, 2X
+  and 7X are untested until an owner runs it.
 
 ## License
 

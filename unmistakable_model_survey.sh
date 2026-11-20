@@ -71,21 +71,59 @@ log() { echo "[survey] $*"; }
 
 # ------------------------------------------------------------- screen ----
 # /app/display.sh is how every stock update writes to the screen (it starts
-# /app/tinydebug with the text). Use it only if it looks like the known stock
-# file: tinydebug and nothing that writes.
-# SURVEY_SCREEN_TEST=1: tests use stub display.sh / tinydebug under $R/app.
+# /app/tinydebug with the text). Used only if it is a known stock file:
+#   e1b877b4546cd7754a0773fe3680fb0f  DP200 / Model 1, 3DWOX 1, 1X, 2X (173 bytes)
+#   2d9a1c1a8d148c465eccf8433a0b1ece  7X (390 bytes, eglfs)
+# Any other file is used only if it starts tinydebug and has none of these
+# commands as whole words (so "-platform" is not "rm"): see dsp_words.
+# SURVEY_SCREEN_TEST=1: tests keep a byte-for-byte copy of a stock
+# display.sh and a stub tinydebug under $R/app; the copy is checked as it
+# is, and run with /app/ pointed at $R/app/.
 APP=/app
 [ "${SURVEY_SCREEN_TEST:-0}" = 1 ] && APP=$R/app
 DSP=$APP/display.sh
+DSP_RUN=$DSP
 TD=$APP/tinydebug
 SCREEN=0
-if { [ -z "$R" ] || [ "$APP" != /app ]; } && [ -f "$DSP" ] && grep -q tinydebug "$DSP" 2>/dev/null &&
-   ! grep -qiE 'setenv|saveenv|nandwrite|flash_erase|ubiformat|ubiupdatevol|dd |sqlite|reboot|poweroff|halt|mtd|mmcblk|rm ' "$DSP" 2>/dev/null; then
-    SCREEN=1
+DSP_RULE="no display.sh"
+dsp_words() {
+    # prints the first forbidden command word, if any
+    awk '{
+        gsub(/[^A-Za-z0-9_]+/, " ")
+        for (i = 1; i <= NF; i++) {
+            w = $i
+            if (w ~ /^(setenv|fw_setenv|saveenv|nandwrite|flash_erase|flash_eraseall|ubiformat|ubiupdatevol|ubimkvol|ubirmvol|dd|sqlite|sqlite3|reboot|poweroff|halt|rm|mv|cp|mount|umount|mkfs|devmem|nanddump|insmod|rmmod)$/ ||
+                w ~ /^(mtd|mmcblk|mkfs)/) { print w; exit }
+        }
+    }' "$1" 2>/dev/null
+}
+if { [ -z "$R" ] || [ "$APP" != /app ]; } && [ -f "$DSP" ]; then
+    DSP_MD5=$(md5sum "$DSP" 2>/dev/null | cut -d' ' -f1)
+    case "$DSP_MD5" in
+        e1b877b4546cd7754a0773fe3680fb0f|2d9a1c1a8d148c465eccf8433a0b1ece)
+            SCREEN=1
+            DSP_RULE="display.sh md5 $DSP_MD5: known stock file"
+            ;;
+        *)
+            _bad=$(dsp_words "$DSP")
+            if [ -n "$_bad" ]; then
+                DSP_RULE="display.sh md5 $DSP_MD5: unknown, not used (has the word '$_bad')"
+            elif ! grep -q tinydebug "$DSP" 2>/dev/null; then
+                DSP_RULE="display.sh md5 $DSP_MD5: unknown, not used (no tinydebug)"
+            else
+                SCREEN=1
+                DSP_RULE="display.sh md5 $DSP_MD5: unknown, used (word check passed)"
+            fi
+            ;;
+    esac
+    if [ $SCREEN = 1 ] && [ "$APP" != /app ]; then
+        DSP_RUN=$WORK/display_test.sh
+        sed "s#/app/#$APP/#g" "$DSP" > "$DSP_RUN" && chmod +x "$DSP_RUN"
+    fi
 fi
 show() {
     log "$1 / $2 / $3"
-    [ $SCREEN = 1 ] && "$DSP" "$1" "$2" "$3" "" >/dev/null 2>&1 </dev/null
+    [ $SCREEN = 1 ] && "$DSP_RUN" "$1" "$2" "$3" "" >/dev/null 2>&1 </dev/null
 }
 
 # ------------------------------------------------------------- helpers ----
@@ -198,6 +236,7 @@ take_screen() {
 screen_note() {
     sec "screen"
     echo "display.sh used: $SCREEN; printingStatus: ${PRINTING:-unknown}; appBrowser taken over: $GUI_TAKEN" >> "$RAW"
+    echo "$DSP_RULE" >> "$RAW"
     if [ $GUI_TAKEN = 1 ]; then
         echo "appBrowser command: $(tr '\n' ' ' < "$GUI_DIR/cmd")" >> "$RAW"
         echo "appBrowser folder: $(cat "$GUI_DIR/cwd" 2>/dev/null)" >> "$RAW"
@@ -332,6 +371,7 @@ karas_awk='
 
 # ------------------------------------------------------------- start ----
 log "version $SURVEY_VERSION, stick $STICK"
+log "$DSP_RULE"
 
 # --- identity
 FW=
