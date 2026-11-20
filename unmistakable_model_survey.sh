@@ -14,9 +14,9 @@
 #   - move a motor, heat, reboot, scan Wi-Fi or probe I2C;
 #   - run a vendor script (it reads /snapshot_version.sh as text). The stock
 #     programs it starts are the ones Sindoh's own USB tools use for the
-#     screen: /app/display.sh (only after checking that it just draws text),
-#     /app/tinydebug (wdt disable, keywait) and /app/appBrowser again with
-#     the command line it had (see "screen takeover").
+#     screen: /app/display.sh (a known stock file, see below), /app/tinydebug
+#     (wdt disable) and /app/appBrowser again with the command line it had,
+#     once the stick is out (see "screen takeover").
 # Wi-Fi names and keys, passwords, e-mail settings, serial numbers, MAC and IP
 # addresses are masked before the file is written (see mask_awk below).
 #
@@ -121,9 +121,23 @@ if { [ -z "$R" ] || [ "$APP" != /app ]; } && [ -f "$DSP" ]; then
         sed "s#/app/#$APP/#g" "$DSP" > "$DSP_RUN" && chmod +x "$DSP_RUN"
     fi
 fi
+# The 1X shows about 25 characters per line ("Reading printer info, abo"):
+# every line is kept to 22; a longer one is cut and logged (the tests fail
+# on that log line).
+LINE_MAX=22
+fit() {
+    if [ ${#1} -gt $LINE_MAX ]; then
+        # stderr: stdout is the line itself
+        log "TOO LONG for the screen (${#1} > $LINE_MAX): $1" >&2
+        printf '%s' "$1" | cut -c1-$LINE_MAX
+    else
+        printf '%s' "$1"
+    fi
+}
 show() {
     log "$1 / $2 / $3"
-    [ $SCREEN = 1 ] && "$DSP_RUN" "$1" "$2" "$3" "" >/dev/null 2>&1 </dev/null
+    [ $SCREEN = 1 ] || return 0
+    "$DSP_RUN" "$(fit "$1")" "$(fit "$2")" "$(fit "$3")" "" >/dev/null 2>&1 </dev/null
 }
 
 # ------------------------------------------------------------- helpers ----
@@ -161,7 +175,10 @@ tool() {
     fi
 }
 
-sec() { printf '\n===== %s =====\n' "$*" >> "$RAW"; }
+sec() {
+    stick_in || pulled
+    printf '\n===== %s =====\n' "$*" >> "$RAW"
+}
 
 # run MAXLINES SECONDS LABEL command args...: one section of the report
 run() {
@@ -191,10 +208,11 @@ run() {
 # drawing over display.sh's text (seen on a 1X, 2026-11-20). Sindoh's own
 # USB tools (1X update.sh; DP200 karas_pinetree_util.sh kill_app) put a
 # message over it like this: "tinydebug wdt disable", kill -9 appBrowser,
-# display.sh, "tinydebug keywait" for a touch. The survey does the same, but
-# only to appBrowser: UIManager, the motion firmware, stdin2log and the
-# watchdog pinger keep running. Afterwards appBrowser is started again with
-# the exact command line, environment and folder it had (the stock
+# display.sh (and "tinydebug keywait" for a touch, which the survey doesn't
+# use: its last message stays until the stick is pulled). The survey stops
+# only appBrowser: UIManager, the motion firmware, stdin2log and the
+# watchdog pinger keep running. Once the stick is out, appBrowser is started
+# again with the exact command line, environment and folder it had (the stock
 # "recovery.check.sh --restart-appbrowser" restarts it the same way, alone,
 # with UIManager running; its own flags are for other boards).
 # Skipped while karas.db does not say "not printing" (printingStatus 0).
@@ -273,31 +291,46 @@ restore_screen() {
 # a stop signal must not leave the touch screen off
 trap 'restore_screen; rm -rf "$WORK" "$LOCK"; exit 0' HUP INT TERM
 
+# Is our stick still in? /proc/mounts can list /mnt/sda1 more than once (a
+# 1X report had a stale /dev/sda1 under a newer /dev/sdb1), so follow the
+# stick's own device: the top mount at the start, and its /sys block node.
+STICK_ROOT=$(dirname "$STICK")
+STICK_DEV=
+[ -z "$R" ] && STICK_DEV=$(awk -v d="$STICK_ROOT" '$2 == d { dev = $1 } END { print dev }' /proc/mounts 2>/dev/null)
 stick_in() {
-    [ -n "$R" ] && { [ -d "$STICK" ]; return; }
-    awk -v d="$(dirname "$STICK")" '$2 == d { f = 1 } END { exit !f }' /proc/mounts 2>/dev/null
+    # tests: the stick "comes out" when SURVEY_PULL_FLAG's file appears
+    [ -n "$R" ] && { [ -d "$STICK" ] && [ ! -e "${SURVEY_PULL_FLAG:-/nonexistent/flag}" ]; return; }
+    if [ -n "$STICK_DEV" ]; then
+        awk -v d="$STICK_ROOT" -v s="$STICK_DEV" '$1 == s && $2 == d { f = 1 } END { exit !f }' /proc/mounts 2>/dev/null &&
+            [ -e "/sys/class/block/${STICK_DEV#/dev/}" ]
+    else
+        awk -v d="$STICK_ROOT" '$2 == d { f = 1 } END { exit !f }' /proc/mounts 2>/dev/null
+    fi
 }
-# the final message: waits for a touch, the stick being pulled, or 60 s.
-# SURVEY_POPUP_SECS (tests only, with SURVEY_ROOT) makes it shorter.
-POPUP_SECS=60
-[ -n "$R" ] && [ -n "${SURVEY_POPUP_SECS:-}" ] && POPUP_SECS=$SURVEY_POPUP_SECS
-popup() {
+# pulled out during the survey: nothing can be saved, give the screen back
+pulled() {
+    log "stick removed during the survey: stopping, nothing saved"
+    restore_screen
+    rm -rf "$WORK" "$LOCK"
+    exit 0
+}
+# The last message stays until the stick is pulled out; only then does the
+# touch screen come back. Restarting it with the stick still in would leave
+# the stick plugged into a running printer (owner, 2026-11-20). No time
+# limit: a stick left in keeps the message up.
+until_pulled() {
     show "$1" "$2" "$3"
-    [ $GUI_TAKEN = 1 ] && [ -x "$TD" ] || return 0
-    _end=$(( $(date +%s) + POPUP_SECS ))
-    while :; do
-        _left=$(( _end - $(date +%s) ))
-        [ $_left -gt 0 ] || { log "no touch for $POPUP_SECS s: closing"; return 0; }
-        tmo "$_left" "$TD" keywait >/dev/null 2>&1 </dev/null
-        _rc=$?
-        # pulling the stick makes the stock media.connect kill -9 every
-        # tinydebug, keywait too: that is not a touch, but closes as well
+    [ $GUI_TAKEN = 1 ] || return 0
+    _n=0
+    while stick_in; do
         sleep 1
-        stick_in || { log "stick removed: closing"; return 0; }
-        [ $_rc = 0 ] && { log "touched: closing"; return 0; }
-        # ended some other way with the stick still in: show it again
-        show "$1" "$2" "$3"
+        _n=$((_n + 1))
+        # the message's tinydebug ended some other way: draw it again
+        if [ $((_n % 10)) = 0 ] && [ -z "$(pidof tinydebug 2>/dev/null)" ]; then
+            show "$1" "$2" "$3"
+        fi
     done
+    log "stick removed: giving the screen back"
 }
 
 # show FILE...: whole small text files (one section each)
@@ -416,7 +449,7 @@ done
 PID=$(printf '%s|%s' "$SERIAL" "$MAC" | md5sum 2>/dev/null | cut -c1-8)
 
 take_screen
-show "Model survey" "Reading printer info, about a minute" "Do not remove the stick"
+show "Model survey" "Reading printer info" "Keep the stick in"
 
 sec "survey"
 {
@@ -633,7 +666,7 @@ OUT=$ROOTDIR/survey_$_name.txt
 # Write only onto the stick itself: if it was unmounted meanwhile,
 # /mnt/sda1 would be a plain folder on the printer's own flash.
 STICK_OK=1
-if [ -z "$R" ] && ! awk -v d="$ROOTDIR" '$2 == d { f = 1 } END { exit !f }' /proc/mounts 2>/dev/null; then
+if ! stick_in; then
     STICK_OK=0
     OUT=
 fi
@@ -648,20 +681,15 @@ sync
 # let the stock update unmount the stick now
 exec 9<&-
 if [ $STICK_OK = 0 ]; then
+    # already out: the screen comes back at once
     log "the stick is no longer mounted at $ROOTDIR; nothing written"
-    popup "Model survey" "The stick was unmounted, nothing saved" "Touch to close"
 elif [ -s "$OUT" ]; then
     _kb=$(( $(wc -c < "$OUT") / 1024 ))
     log "wrote $OUT ($_kb KB)"
-    if [ $GUI_TAKEN = 1 ]; then
-        popup "Model survey complete" "$(basename "$OUT")" "Touch to close"
-    else
-        show "Model survey complete" "$(basename "$OUT")" "You can remove the stick"
-        sleep 3
-    fi
+    until_pulled "Model survey complete" "Report saved" "Remove the stick"
 else
     log "could not write the report to the stick"
-    popup "Model survey" "Could not write to the stick" "Touch to close"
+    until_pulled "Model survey failed" "Could not save" "Remove the stick"
 fi
 restore_screen
 rm -rf "$WORK" "$LOCK" 2>/dev/null
