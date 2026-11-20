@@ -163,7 +163,12 @@ files.
   - a command that hangs is stopped after its time limit, and the rest
     still runs;
   - the script always exits 0, which the stock update needs, and cleans up
-    `/tmp`.
+    `/tmp`;
+  - when two copies start at once, the second does nothing. Some printers'
+    USB hotplug runs the update twice for one stick (the 1X's
+    `media.connect` runs it for `sda` and again for `sda1`). The running
+    copy keeps the stick busy until its report is written. It writes only
+    if the stick is still mounted, never into the printer's own `/mnt` folder.
 - **Not tested on a printer yet**, on any model. The DP200 family will be
   first. The 3DWOX 1, 2X, 1X and 7X are untested until an owner runs it.
 

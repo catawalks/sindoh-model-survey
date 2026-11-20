@@ -33,8 +33,31 @@ fi
 PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:$PATH
 export PATH
 
+# One survey at a time. Some printers' hotplug runs auto_update.sh twice for
+# one stick (once for sda, once for sda1); the second copy does nothing.
+LOCK=${SURVEY_TMP:-/tmp}/model_survey.lock
+if ! mkdir "$LOCK" 2>/dev/null; then
+    _o=$(cat "$LOCK/pid" 2>/dev/null)
+    if [ -n "$_o" ] && kill -0 "$_o" 2>/dev/null; then
+        echo "[survey] already running (pid $_o); this copy does nothing"
+        exit 0
+    fi
+    # left over from a run that was cut off
+    rm -rf "$LOCK"
+    mkdir "$LOCK" 2>/dev/null || exit 0
+fi
+echo $$ > "$LOCK/pid"
+
+# Keep a file on the stick open until the report is written: the stock
+# auto_update.sh unmounts the stick after each script it runs, and the open
+# file makes that fail (busy) if another copy finishes first.
+for _f in "$STICK"/unmistakable_model_survey.she; do
+    [ -f "$_f" ] && exec 9< "$_f"
+done
+
 WORK=${SURVEY_TMP:-/tmp}/model_survey.$$
 if ! mkdir -p "$WORK"; then
+    rm -rf "$LOCK"
     echo "[survey] cannot make $WORK; nothing done"
     exit 0
 fi
@@ -439,15 +462,27 @@ echo "survey finished: $(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)" >> "$RAW"
 _name=$(printf '%s_%s_%s' "${FW:-unknown}" "${TLI:-x}" "$(date +%Y%m%d-%H%M%S 2>/dev/null)" | tr -c 'A-Za-z0-9_.-' '_')
 ROOTDIR=$(dirname "$STICK")
 OUT=$ROOTDIR/survey_$_name.txt
-if ! ( : > "$OUT" ) 2>/dev/null; then
+# Write only onto the stick itself: if it was unmounted meanwhile,
+# /mnt/sda1 would be a plain folder on the printer's own flash.
+STICK_OK=1
+if [ -z "$R" ] && ! awk -v d="$ROOTDIR" '$2 == d { f = 1 } END { exit !f }' /proc/mounts 2>/dev/null; then
+    STICK_OK=0
+    OUT=
+fi
+if [ $STICK_OK = 1 ] && ! ( : > "$OUT" ) 2>/dev/null; then
     OUT=$STICK/survey_$_name.txt
 fi
 # print files people uploaded (in the /app listing): hide the name
-awk "$mask_awk" "$RAW" |
+[ $STICK_OK = 1 ] && awk "$mask_awk" "$RAW" |
     sed -e 's#[^ /]*\.[gG][cC][oO][dD][eE]$#<print file>#' -e 's#[^ /]*\.[gG][cC][oO]$#<print file>#' \
         -e 's#[^ /]*\.3[dD][wW]$#<print file>#' -e 's#[^ /]*\.[sS][tT][lL]$#<print file>#' > "$OUT" 2>/dev/null
 sync
-if [ -s "$OUT" ]; then
+# let the stock update unmount the stick now
+exec 9<&-
+if [ $STICK_OK = 0 ]; then
+    log "the stick is no longer mounted at $ROOTDIR; nothing written"
+    show "Model survey" "The stick was unmounted" "Plug it in again to retry"
+elif [ -s "$OUT" ]; then
     _kb=$(( $(wc -c < "$OUT") / 1024 ))
     log "wrote $OUT ($_kb KB)"
     show "Model survey done" "$(basename "$OUT")" "Remove the stick, then power off and on"
@@ -455,7 +490,7 @@ else
     log "could not write the report to the stick"
     show "Model survey" "Could not write to the stick" "Nothing on the printer was changed"
 fi
-rm -rf "$WORK" 2>/dev/null
+rm -rf "$WORK" "$LOCK" 2>/dev/null
 sleep 3
 # always 0: the stock auto_update.sh stops on a failed script
 exit 0
