@@ -225,9 +225,9 @@ SUB=$(sed -n 's/.*RODIN_SUB=["'\'']*\([^"'\'' ]*\).*/\1/p' "$R/etc/export_rodin_
 BOARD=$(first /sys/kernel/board_name)
 
 DB=
-for _f in /app/nvram/karas.db /data/karas.db /userdata/karas.db /app/karas.db; do
-    [ -f "$R$_f" ] && { DB=$_f; break; }
-done
+# the same path on every model: the DP200 / 3DWOX 1 auto_update.sh and the
+# 2X, 1X and 7X update.sh all read /app/nvram/karas.db
+[ -f "$R/app/nvram/karas.db" ] && DB=/app/nvram/karas.db
 SQL=$(tool sqlite3)
 DBC=$WORK/karas_copy.db
 TLI=

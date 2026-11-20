@@ -73,11 +73,15 @@ All of this describes the printer, not you:
   the survey never runs it), the model variant (`RODIN_SUB`), the board name,
   the `auto_update.sh` version, and the busybox, OpenSSL and sqlite versions
   with the list of busybox commands.
-- **The printer's database `karas.db`:** its table layout, the row count of
-  each table, and the contents of the machine and settings tables
-  (`INST_MACHINE`, `CONF_*`, `MCONF_*`). Those hold the model code and the
-  motion, temperature and fan settings. The survey reads a copy in memory,
-  never the database itself. History and log tables are not read.
+- **The printer's database `/app/nvram/karas.db`:** its table layout, the
+  row count of each table, and the contents of the machine and settings
+  tables (`INST_MACHINE`, `CONF_*`, `MCONF_*`). Those hold the model code
+  and the motion, temperature and fan settings. The survey reads a copy in
+  memory, never the database itself. History and log tables are not read.
+  The path is the same on every model: the DP200 / 3DWOX 1 `auto_update.sh`
+  and the 2X, 1X and 7X `update.sh` all read it there. Sindoh's updates
+  don't ship the database, though, so only the DP200's tables are known so
+  far. The table layout in the report shows what the other models have.
 - **Chip and kernel:** `/proc/cpuinfo`, memory, kernel version and boot
   command line, the memory map, interrupts, drivers and modules, the device
   tree (node names and `compatible` strings), and the kernel build config.
