@@ -12,11 +12,11 @@
 #   - read or copy a flash image (only the md5 of the first 256 KB of the
 #     boot partitions, to tell boot loader builds apart);
 #   - move a motor, heat, reboot, scan Wi-Fi or probe I2C;
-#   - run a vendor script (it reads /snapshot_version.sh as text). The stock
-#     programs it starts are the ones Sindoh's own USB tools use for the
-#     screen: /app/display.sh (a known stock file, see below), /app/tinydebug
-#     (wdt disable) and /app/appBrowser again with the command line it had,
-#     once the stick is out (see "screen takeover").
+#   - run a vendor script (it reads /snapshot_version.sh as text);
+#   - touch the screen or any stock process: no display.sh, tinydebug, LED
+#     or appBrowser. It runs in the background; the screen never changes.
+#     (v1.1 builds that took over the screen left a 1X's restarted
+#     appBrowser stuck at "Booting"; it needed a power cycle.)
 # Wi-Fi names and keys, passwords, e-mail settings, serial numbers, MAC and IP
 # addresses are masked before the file is written (see mask_awk below).
 #
@@ -68,77 +68,6 @@ PART=$WORK/part.txt
 : > "$RAW"
 
 log() { echo "[survey] $*"; }
-
-# ------------------------------------------------------------- screen ----
-# /app/display.sh is how every stock update writes to the screen (it starts
-# /app/tinydebug with the text). Used only if it is a known stock file:
-#   e1b877b4546cd7754a0773fe3680fb0f  DP200 / Model 1, 3DWOX 1, 1X, 2X (173 bytes)
-#   2d9a1c1a8d148c465eccf8433a0b1ece  7X (390 bytes, eglfs)
-# Any other file is used only if it starts tinydebug and has none of these
-# commands as whole words (so "-platform" is not "rm"): see dsp_words.
-# SURVEY_SCREEN_TEST=1: tests keep a byte-for-byte copy of a stock
-# display.sh and a stub tinydebug under $R/app; the copy is checked as it
-# is, and run with /app/ pointed at $R/app/.
-APP=/app
-[ "${SURVEY_SCREEN_TEST:-0}" = 1 ] && APP=$R/app
-DSP=$APP/display.sh
-DSP_RUN=$DSP
-TD=$APP/tinydebug
-SCREEN=0
-DSP_RULE="no display.sh"
-dsp_words() {
-    # prints the first forbidden command word, if any
-    awk '{
-        gsub(/[^A-Za-z0-9_]+/, " ")
-        for (i = 1; i <= NF; i++) {
-            w = $i
-            if (w ~ /^(setenv|fw_setenv|saveenv|nandwrite|flash_erase|flash_eraseall|ubiformat|ubiupdatevol|ubimkvol|ubirmvol|dd|sqlite|sqlite3|reboot|poweroff|halt|rm|mv|cp|mount|umount|mkfs|devmem|nanddump|insmod|rmmod)$/ ||
-                w ~ /^(mtd|mmcblk|mkfs)/) { print w; exit }
-        }
-    }' "$1" 2>/dev/null
-}
-if { [ -z "$R" ] || [ "$APP" != /app ]; } && [ -f "$DSP" ]; then
-    DSP_MD5=$(md5sum "$DSP" 2>/dev/null | cut -d' ' -f1)
-    case "$DSP_MD5" in
-        e1b877b4546cd7754a0773fe3680fb0f|2d9a1c1a8d148c465eccf8433a0b1ece)
-            SCREEN=1
-            DSP_RULE="display.sh md5 $DSP_MD5: known stock file"
-            ;;
-        *)
-            _bad=$(dsp_words "$DSP")
-            if [ -n "$_bad" ]; then
-                DSP_RULE="display.sh md5 $DSP_MD5: unknown, not used (has the word '$_bad')"
-            elif ! grep -q tinydebug "$DSP" 2>/dev/null; then
-                DSP_RULE="display.sh md5 $DSP_MD5: unknown, not used (no tinydebug)"
-            else
-                SCREEN=1
-                DSP_RULE="display.sh md5 $DSP_MD5: unknown, used (word check passed)"
-            fi
-            ;;
-    esac
-    if [ $SCREEN = 1 ] && [ "$APP" != /app ]; then
-        DSP_RUN=$WORK/display_test.sh
-        sed "s#/app/#$APP/#g" "$DSP" > "$DSP_RUN" && chmod +x "$DSP_RUN"
-    fi
-fi
-# The 1X shows about 25 characters per line ("Reading printer info, abo"):
-# every line is kept to 22; a longer one is cut and logged (the tests fail
-# on that log line).
-LINE_MAX=22
-fit() {
-    if [ ${#1} -gt $LINE_MAX ]; then
-        # stderr: stdout is the line itself
-        log "TOO LONG for the screen (${#1} > $LINE_MAX): $1" >&2
-        printf '%s' "$1" | cut -c1-$LINE_MAX
-    else
-        printf '%s' "$1"
-    fi
-}
-show() {
-    log "$1 / $2 / $3"
-    [ $SCREEN = 1 ] || return 0
-    "$DSP_RUN" "$(fit "$1")" "$(fit "$2")" "$(fit "$3")" "" >/dev/null 2>&1 </dev/null
-}
 
 # ------------------------------------------------------------- helpers ----
 # tmo SECONDS command args...: run a program (not a shell function) with a
@@ -203,93 +132,8 @@ run() {
     return 0
 }
 
-# ------------------------------------------------- screen takeover ----
-# The stock touch screen (/app/appBrowser, started by UIManager) keeps
-# drawing over display.sh's text (seen on a 1X, 2026-11-20). Sindoh's own
-# USB tools (1X update.sh; DP200 karas_pinetree_util.sh kill_app) put a
-# message over it like this: "tinydebug wdt disable", kill -9 appBrowser,
-# display.sh (and "tinydebug keywait" for a touch, which the survey doesn't
-# use: its last message stays until the stick is pulled). The survey stops
-# only appBrowser: UIManager, the motion firmware, stdin2log and the
-# watchdog pinger keep running. Once the stick is out, appBrowser is started
-# again with the exact command line, environment and folder it had (the stock
-# "recovery.check.sh --restart-appbrowser" restarts it the same way, alone,
-# with UIManager running; its own flags are for other boards).
-# Skipped while karas.db does not say "not printing" (printingStatus 0).
-GUI_TAKEN=0
-GUI_DIR=
-gui_pids() {
-    for _g in /proc/[0-9]*; do
-        _a=$(tr '\0' '\n' < "$_g/cmdline" 2>/dev/null | head -n 1)
-        case "$_a" in
-            appBrowser|*/appBrowser|*/appBrowser.exe) echo "${_g#/proc/}" ;;
-        esac
-    done
-}
-take_screen() {
-    [ $SCREEN = 1 ] || return 0
-    if [ "$PRINTING" != 0 ]; then
-        log "printingStatus '${PRINTING:-unknown}': the touch screen is left alone"
-        return 0
-    fi
-    _gp=$(gui_pids | head -n 1)
-    if [ -z "$_gp" ]; then
-        log "no appBrowser running: display.sh only"
-        return 0
-    fi
-    GUI_DIR=$WORK/gui
-    mkdir -p "$GUI_DIR" || return 0
-    tr '\0' '\n' < "/proc/$_gp/cmdline" > "$GUI_DIR/cmd" 2>/dev/null
-    tr '\0' '\n' < "/proc/$_gp/environ" > "$GUI_DIR/env" 2>/dev/null
-    readlink "/proc/$_gp/cwd" > "$GUI_DIR/cwd" 2>/dev/null
-    # without its command line it could not be started again: leave it
-    [ -s "$GUI_DIR/cmd" ] || { log "can't read appBrowser's command line"; return 0; }
-    log "taking the screen from appBrowser (pid $_gp): $(tr '\n' ' ' < "$GUI_DIR/cmd")"
-    [ -x "$TD" ] && "$TD" wdt disable >/dev/null 2>&1 </dev/null
-    for _g in $(gui_pids); do kill -9 "$_g" 2>/dev/null; done
-    [ -x "$TD" ] && "$TD" wdt disable >/dev/null 2>&1 </dev/null
-    GUI_TAKEN=1
-}
-# for the report: did something start appBrowser again by itself?
-screen_note() {
-    sec "screen"
-    echo "display.sh used: $SCREEN; printingStatus: ${PRINTING:-unknown}; appBrowser taken over: $GUI_TAKEN" >> "$RAW"
-    echo "$DSP_RULE" >> "$RAW"
-    if [ $GUI_TAKEN = 1 ]; then
-        echo "appBrowser command: $(tr '\n' ' ' < "$GUI_DIR/cmd")" >> "$RAW"
-        echo "appBrowser folder: $(cat "$GUI_DIR/cwd" 2>/dev/null)" >> "$RAW"
-        echo "appBrowser after the takeover: $(gui_pids | tr '\n' ' ')(empty = stayed stopped)" >> "$RAW"
-    fi
-}
-restore_screen() {
-    [ $GUI_TAKEN = 1 ] || return 0
-    GUI_TAKEN=0
-    # our message off (display.sh does the same before each message)
-    for _g in $(pidof tinydebug 2>/dev/null); do kill -9 "$_g" 2>/dev/null; done
-    if [ -n "$(gui_pids)" ]; then
-        log "appBrowser is already running again"
-        return 0
-    fi
-    log "starting appBrowser again"
-    _cwd=$(cat "$GUI_DIR/cwd" 2>/dev/null)
-    [ -d "$_cwd" ] || _cwd=/app
-    # env -i NAME=value... command args...: exactly what it had before
-    set --
-    while IFS= read -r _l; do
-        case "$_l" in *=*) set -- "$@" "$_l" ;; esac
-    done < "$GUI_DIR/env"
-    while IFS= read -r _l; do set -- "$@" "$_l"; done < "$GUI_DIR/cmd"
-    _ss=$(tool setsid)
-    ( cd "$_cwd" && exec $_ss env -i "$@" ) >/dev/null 2>&1 </dev/null &
-    sleep 3
-    # the priority the stock /app/run.sh gives it
-    for _g in $(gui_pids); do
-        [ -w "/proc/$_g/oom_adj" ] && echo -16 > "/proc/$_g/oom_adj" 2>/dev/null
-        log "appBrowser pid $_g"
-    done
-}
-# a stop signal must not leave the touch screen off
-trap 'restore_screen; rm -rf "$WORK" "$LOCK"; exit 0' HUP INT TERM
+# a stop signal still cleans up /tmp and the lock
+trap 'rm -rf "$WORK" "$LOCK"; exit 0' HUP INT TERM
 
 # Is our stick still in? /proc/mounts can list /mnt/sda1 more than once (a
 # 1X report had a stale /dev/sda1 under a newer /dev/sdb1), so follow the
@@ -307,32 +151,12 @@ stick_in() {
         awk -v d="$STICK_ROOT" '$2 == d { f = 1 } END { exit !f }' /proc/mounts 2>/dev/null
     fi
 }
-# pulled out during the survey: nothing can be saved, give the screen back
+# pulled out during the survey: nothing can be saved, so stop
 pulled() {
     log "stick removed during the survey: stopping, nothing saved"
-    restore_screen
     rm -rf "$WORK" "$LOCK"
     exit 0
 }
-# The last message stays until the stick is pulled out; only then does the
-# touch screen come back. Restarting it with the stick still in would leave
-# the stick plugged into a running printer (owner, 2026-11-20). No time
-# limit: a stick left in keeps the message up.
-until_pulled() {
-    show "$1" "$2" "$3"
-    [ $GUI_TAKEN = 1 ] || return 0
-    _n=0
-    while stick_in; do
-        sleep 1
-        _n=$((_n + 1))
-        # the message's tinydebug ended some other way: draw it again
-        if [ $((_n % 10)) = 0 ] && [ -z "$(pidof tinydebug 2>/dev/null)" ]; then
-            show "$1" "$2" "$3"
-        fi
-    done
-    log "stick removed: giving the screen back"
-}
-
 # show FILE...: whole small text files (one section each)
 files() {
     for _f in "$@"; do
@@ -404,7 +228,6 @@ karas_awk='
 
 # ------------------------------------------------------------- start ----
 log "version $SURVEY_VERSION, stick $STICK"
-log "$DSP_RULE"
 
 # --- identity
 FW=
@@ -426,7 +249,6 @@ DBC=$WORK/karas_copy.db
 TLI=
 MODEL=
 SERIAL=
-PRINTING=
 if [ -n "$DB" ] && [ -n "$SQL" ]; then
     # query a copy: the printer's own database is never opened
     cp "$R$DB" "$DBC" 2>/dev/null
@@ -436,9 +258,6 @@ if [ -n "$DB" ] && [ -n "$SQL" ]; then
     TLI=$(echo "$TLI" | tr -d '\r' | head -n 1)
     MODEL=$(echo "$MODEL" | tr -d '\r' | head -n 1)
     SERIAL=$(echo "$SERIAL" | tr -d '\r' | head -n 1)
-    # 0 = not printing (DP200 and 1X karas.db); anything else, or no
-    # answer, and the touch screen is left alone
-    PRINTING=$(tmo 10 $SQL "$DBC" 'select printingStatus from INST_ENGINE_GENERAL limit 1' 2>/dev/null | tr -d '\r' | head -n 1)
 fi
 MAC=
 for _n in eth0 mlan0 wlan0; do
@@ -448,8 +267,6 @@ done
 # a short id to tell reports from one printer apart (not reversible)
 PID=$(printf '%s|%s' "$SERIAL" "$MAC" | md5sum 2>/dev/null | cut -c1-8)
 
-take_screen
-show "Model survey" "Reading printer info" "Keep the stick in"
 
 sec "survey"
 {
@@ -656,7 +473,6 @@ done
 run 4000 15 "dmesg" dmesg
 
 # ------------------------------------------------------------ write ----
-screen_note
 sec "end"
 echo "survey finished: $(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)" >> "$RAW"
 
@@ -681,17 +497,13 @@ sync
 # let the stock update unmount the stick now
 exec 9<&-
 if [ $STICK_OK = 0 ]; then
-    # already out: the screen comes back at once
     log "the stick is no longer mounted at $ROOTDIR; nothing written"
 elif [ -s "$OUT" ]; then
     _kb=$(( $(wc -c < "$OUT") / 1024 ))
     log "wrote $OUT ($_kb KB)"
-    until_pulled "Model survey complete" "Report saved" "Remove the stick"
 else
     log "could not write the report to the stick"
-    until_pulled "Model survey failed" "Could not save" "Remove the stick"
 fi
-restore_screen
 rm -rf "$WORK" "$LOCK" 2>/dev/null
 # always 0: the stock auto_update.sh stops on a failed script
 exit 0
