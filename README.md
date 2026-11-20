@@ -57,7 +57,7 @@ folders works on every model above.
    survey complete"**, the file name and "Touch to close".
 6. **Touch the screen**, or just pull the stick out. The normal screen
    comes back after a few seconds. With no touch, the message closes by
-   itself after 10 minutes. If the normal screen doesn't come back, power
+   itself after 1 minute. If the normal screen doesn't come back, power
    the printer off and on.
 7. **Send us the file.** It's at the top level of the stick, named like
    `survey_RODUP_220111_1_3DWOX1_20261120-153000.txt` (firmware, model code,
@@ -206,7 +206,7 @@ files.
     copy keeps the stick busy until its report is written. It writes only
     if the stick is still mounted, never into the printer's own `/mnt` folder.
   - the screen takeover, with stub `display.sh` / `tinydebug` and a fake
-    `appBrowser`. A touch, a 10-minute timeout and a pulled stick each
+    `appBrowser`. A touch, the 1-minute timeout and a pulled stick each
     close the message and start `appBrowser` again, with the same command
     line, folder and settings. While printing (`printingStatus` not 0), or
     with no `appBrowser` running, the screen is left alone.

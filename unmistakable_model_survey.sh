@@ -238,8 +238,10 @@ stick_in() {
     [ -n "$R" ] && { [ -d "$STICK" ]; return; }
     awk -v d="$(dirname "$STICK")" '$2 == d { f = 1 } END { exit !f }' /proc/mounts 2>/dev/null
 }
-# the final message: waits for a touch, the stick being pulled, or 10 min
-POPUP_SECS=${SURVEY_POPUP_SECS:-600}
+# the final message: waits for a touch, the stick being pulled, or 60 s.
+# SURVEY_POPUP_SECS (tests only, with SURVEY_ROOT) makes it shorter.
+POPUP_SECS=60
+[ -n "$R" ] && [ -n "${SURVEY_POPUP_SECS:-}" ] && POPUP_SECS=$SURVEY_POPUP_SECS
 popup() {
     show "$1" "$2" "$3"
     [ $GUI_TAKEN = 1 ] && [ -x "$TD" ] || return 0
