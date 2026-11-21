@@ -1,7 +1,7 @@
 # Sindoh model survey
 
 A USB stick that maps out a Sindoh 3D printer's hardware and firmware, so
-we can bring the [Klipper port](https://github.com/catawalks/sindoh) and
+we can bring the [Klipper port](https://github.com/catawalks/sindoh-klipper) and
 the [boot logo tool](https://github.com/catawalks/sindoh-boot-logo) to more
 models. It **only reads**. It changes nothing on the printer, and the printer
 boots normally afterwards.
