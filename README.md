@@ -10,8 +10,10 @@ The printer's own USB update runs it, so you don't need a serial cable, a
 root shell or any extra software. It saves one text file on the stick. Send
 us that file.
 
-> **Status:** new. It has run on a 3DWOX 1X. Other models are tested on a
-> PC only. See [Tested so far](#tested-so-far).
+> **Status:** v1.1 runs on real hardware: on a 3DWOX 1X it saved a
+> complete report in about 15 seconds, with the printer's screen and
+> programs untouched and no change to the printer. Other models are waiting
+> for their first owner run. See [Tested so far](#tested-so-far).
 
 ## Supported printers
 
@@ -192,12 +194,15 @@ files.
   - a stick pulled during the survey stops it at once, with no report;
   - with a fake running touch screen program, no screen program is
     started, and the fake one is left running untouched.
-- **On printers:** on a 3DWOX 1X (`ROD1X_200916_2`), v1.0 and the v1.1
-  test builds each saved a complete report. The builds that showed
-  messages left the touch screen stuck at "Booting" (see above). This
-  build, which doesn't touch the screen, hasn't run on a printer yet.
-  The DP200 family, 3DWOX 1, 2X and 7X are untested until an owner runs
-  it.
+- **On printers:** on a 3DWOX 1X (`ROD1X_200916_2`), five runs, each
+  with a complete report. **v1.1 (this release)**: the report was on the
+  stick within about 15 seconds, the screen stayed as it was, and the
+  printer worked normally after the stick was pulled. (Two test builds
+  that showed messages on the screen left it stuck at "Booting"; that is
+  why v1.1 shows nothing.)
+- The DP200 family, 3DWOX 1, 2X and 7X have not run it yet. A DP200 that
+  runs other firmware (for example a Klipper conversion) won't run it at
+  all: it needs Sindoh's own firmware, whose USB updater starts it.
 
 ## License
 
