@@ -468,6 +468,14 @@ sec "du -sk"
 for _d in /app /usr /lib /bin /sbin /etc /boot /opt /root /home /data /userdata /systemdata /var /tmp; do
     [ -d "$R$_d" ] && tmo 60 du -sk "$R$_d" >> "$RAW" 2>&1
 done
+# What fills the root, one level down (sample prints, the app's folders):
+# sizes only, no names below these
+sec "du -sk root and /app entries"
+for _d in "$R"/* "$R"/app/*; do
+    [ -d "$_d" ] || continue
+    case "$_d" in "$R"/proc|"$R"/sys|"$R"/dev|"$R"/mnt|"$R"/media|"$R"/tmp) continue ;; esac
+    tmo 30 du -sk "$_d" >> "$RAW" 2>&1
+done
 
 # --- kernel log last (the longest part)
 run 4000 15 "dmesg" dmesg

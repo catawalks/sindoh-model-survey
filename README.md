@@ -94,6 +94,8 @@ All of this describes the printer, not you:
   volumes, mounts, free space) and the size and type of each disk. It
   records an **md5 checksum** of the first 256 KB of the boot partition, to
   tell boot loader builds apart. It never copies the data itself.
+  It also lists the size of each folder at the top of the root and in
+  `/app` (sizes only), to see what fills the flash.
 - **U-Boot settings:** `fw_printenv` (read-only).
 - **Hardware:** serial ports and which programs use them, `/dev`,
   `/sys/class`, buses, USB devices, I²C adapters (the list only; it doesn't
