@@ -24,7 +24,7 @@
 # wrapped so one failure never stops the rest, and slow ones get a time limit.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
-SURVEY_VERSION=1.1
+SURVEY_VERSION=1.2
 
 # SURVEY_ROOT: tests run this against a fake root; empty on a printer
 R=${SURVEY_ROOT:-}

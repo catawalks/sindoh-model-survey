@@ -197,11 +197,14 @@ files.
   - with a fake running touch screen program, no screen program is
     started, and the fake one is left running untouched.
 - **On printers:** on a 3DWOX 1X (`ROD1X_200916_2`), five runs, each
-  with a complete report. **v1.1 (this release)**: the report was on the
+  with a complete report. **v1.1**: the report was on the
   stick within about 15 seconds, the screen stayed as it was, and the
   printer worked normally after the stick was pulled. (Two test builds
   that showed messages on the screen left it stuck at "Booting"; that is
   why v1.1 shows nothing.)
+- **v1.2 (this release)** adds the size of each folder at the top of the
+  root and in `/app` (to see what fills a 3DWOX 1's flash); that part
+  ran on the 1X by hand (28 folders, a few seconds). The rest is v1.1.
 - The DP200 family, 3DWOX 1, 2X and 7X have not run it yet. A DP200 that
   runs other firmware (for example a Klipper conversion) won't run it at
   all: it needs Sindoh's own firmware, whose USB updater starts it.
